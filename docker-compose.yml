@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: educrm
+      POSTGRES_PASSWORD: educrm
+      POSTGRES_DB: educrm
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U educrm -d educrm"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      APP_ENV: development
+      LOG_LEVEL: info
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: "8080"
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: educrm
+      DB_PASSWORD: educrm
+      DB_NAME: educrm
+      DB_SSLMODE: disable
+      # Long enough for local dev; production must use a unique 32+ char secret (see README).
+      JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-please-use-32-chars-minimum-for-staging}
+      JWT_ACCESS_EXPIRATION: ${JWT_ACCESS_EXPIRATION:-15m}
+      JWT_REFRESH_EXPIRATION: ${JWT_REFRESH_EXPIRATION:-168h}
+      AUTO_MIGRATE: "true"
+      MIGRATIONS_PATH: /app/migrations
+      ENABLE_SWAGGER: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
