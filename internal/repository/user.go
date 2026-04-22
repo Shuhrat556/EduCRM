@@ -17,4 +17,5 @@ type UserRepository interface {
 	List(ctx context.Context, p UserListParams) ([]domain.User, int64, error)
 	EmailTaken(ctx context.Context, email string, excludeID *uuid.UUID) (bool, error)
 	PhoneTaken(ctx context.Context, phone string, excludeID *uuid.UUID) (bool, error)
+	UsernameTaken(ctx context.Context, username string, excludeID *uuid.UUID) (bool, error)
 }

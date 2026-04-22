@@ -9,9 +9,10 @@ import (
 
 // CreateGradeRequest is the body for POST /grades.
 type CreateGradeRequest struct {
-	StudentID  uuid.UUID `json:"student_id" example:"550e8400-e29b-41d4-a716-446655440000" binding:"required"`
-	GroupID    uuid.UUID `json:"group_id" example:"6ba7b810-9dad-11d1-80b4-00c04fd430c8" binding:"required"`
-	GradeType  string    `json:"grade_type" example:"teacher_evaluation" binding:"required,oneof=teacher_evaluation student_evaluation"`
+	StudentID  uuid.UUID  `json:"student_id" example:"550e8400-e29b-41d4-a716-446655440000" binding:"required"`
+	GroupID    uuid.UUID  `json:"group_id" example:"6ba7b810-9dad-11d1-80b4-00c04fd430c8" binding:"required"`
+	SubjectID  *uuid.UUID `json:"subject_id"` // optional; defaults to group's subject
+	GradeType  string     `json:"grade_type" example:"teacher_evaluation" binding:"required,oneof=teacher_evaluation student_evaluation"`
 	GradeValue float64   `json:"grade_value" example:"4.5" binding:"required"`
 	Comment    *string   `json:"comment" binding:"omitempty,max=4000"`
 	WeekOf     *string   `json:"week_of" binding:"omitempty"` // YYYY-MM-DD; week bucket is Monday of that week in UTC
@@ -31,6 +32,7 @@ type GradeResponse struct {
 	StudentID     uuid.UUID `json:"student_id"`
 	TeacherID     uuid.UUID `json:"teacher_id"`
 	GroupID       uuid.UUID `json:"group_id"`
+	SubjectID     uuid.UUID `json:"subject_id"`
 	WeekStartDate string    `json:"week_start_date"`
 	GradeType     string    `json:"grade_type"`
 	GradeValue    float64   `json:"grade_value"`
@@ -55,6 +57,7 @@ func GradeResponseFrom(g *domain.Grade) GradeResponse {
 		StudentID:     g.StudentID,
 		TeacherID:     g.TeacherID,
 		GroupID:       g.GroupID,
+		SubjectID:     g.SubjectID,
 		WeekStartDate: g.WeekStartDate.UTC().Format("2006-01-02"),
 		GradeType:     string(g.GradeType),
 		GradeValue:    g.GradeValue,

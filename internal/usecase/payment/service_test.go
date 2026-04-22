@@ -36,6 +36,9 @@ func (s *payStubUsers) EmailTaken(ctx context.Context, email string, excludeID *
 func (s *payStubUsers) PhoneTaken(ctx context.Context, phone string, excludeID *uuid.UUID) (bool, error) {
 	return false, nil
 }
+func (s *payStubUsers) UsernameTaken(ctx context.Context, username string, excludeID *uuid.UUID) (bool, error) {
+	return false, nil
+}
 
 type payStubGroups struct {
 	byID map[uuid.UUID]*domain.Group
@@ -64,6 +67,15 @@ func (s *payStubMem) FindGroupIDByStudentUserID(ctx context.Context, studentUser
 		return nil, nil
 	}
 	return &gid, nil
+}
+func (s *payStubMem) ListStudentUserIDsByGroup(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	for sid, gid := range s.groupByStudent {
+		if gid == groupID {
+			ids = append(ids, sid)
+		}
+	}
+	return ids, nil
 }
 
 type payStubRepo struct {

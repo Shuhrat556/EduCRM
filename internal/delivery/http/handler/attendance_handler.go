@@ -55,16 +55,20 @@ func (h *AttendanceHandler) Create(c *gin.Context) {
 	}
 	st, err := domain.ParseAttendanceStatus(req.Status)
 	if err != nil {
-		response.Error(c, apperror.Validation("status", "status must be present, absent, or late"))
+		response.Error(c, apperror.Validation("status", "status must be present, absent, late, has, or nest"))
 		return
 	}
-	out, err := h.svc.Create(c.Request.Context(), role, actorID, attendance.CreateInput{
+	in := attendance.CreateInput{
 		StudentID:  req.StudentID,
 		GroupID:    req.GroupID,
 		LessonDate: ld,
 		Status:     st,
 		Comment:    req.Comment,
-	})
+	}
+	if req.SubjectID != nil {
+		in.SubjectID = *req.SubjectID
+	}
+	out, err := h.svc.Create(c.Request.Context(), role, actorID, in)
 	if err != nil {
 		response.Error(c, err)
 		return

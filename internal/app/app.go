@@ -28,7 +28,9 @@ import (
 	paymentsvc "github.com/educrm/educrm-backend/internal/usecase/payment"
 	roomsvc "github.com/educrm/educrm-backend/internal/usecase/room"
 	schedulesvc "github.com/educrm/educrm-backend/internal/usecase/schedule"
+	stportal "github.com/educrm/educrm-backend/internal/usecase/studentportal"
 	teachersvc "github.com/educrm/educrm-backend/internal/usecase/teacher"
+	tchportal "github.com/educrm/educrm-backend/internal/usecase/teacherportal"
 	usersvc "github.com/educrm/educrm-backend/internal/usecase/user"
 	jwtpkg "github.com/educrm/educrm-backend/pkg/jwt"
 	"gorm.io/gorm"
@@ -77,6 +79,7 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 	gradeRepo := postgres.NewGradeRepository(db)
 	membershipRepo := postgres.NewStudentMembershipRepository(db)
 	teacherLinkRepo := postgres.NewUserTeacherLinkRepository(db)
+	teacherAssignRepo := postgres.NewTeacherAssignmentRepository(db)
 	roomRepo := postgres.NewRoomRepository(db)
 	paymentRepo := postgres.NewPaymentRepository(db)
 	dashboardStatsRepo := postgres.NewDashboardStatsRepository(db)
@@ -89,8 +92,10 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 	teacherService := teachersvc.NewService(teacherRepo)
 	groupService := groupsvc.NewService(groupRepo, subjectRepo, teacherRepo, roomRepo)
 	scheduleService := schedulesvc.NewService(scheduleRepo, groupRepo, teacherRepo, roomRepo)
-	attendanceService := attendancesvc.NewService(attendanceRepo, groupRepo, userRepo, membershipRepo, teacherLinkRepo)
-	gradeService := gradesvc.NewService(gradeRepo, groupRepo, userRepo, membershipRepo, teacherLinkRepo)
+	attendanceService := attendancesvc.NewService(attendanceRepo, teacherAssignRepo, groupRepo, userRepo, membershipRepo, teacherLinkRepo)
+	gradeService := gradesvc.NewService(gradeRepo, teacherAssignRepo, groupRepo, userRepo, membershipRepo, teacherLinkRepo)
+	teacherPortalService := tchportal.NewService(teacherLinkRepo, teacherAssignRepo, groupRepo, subjectRepo, membershipRepo, userRepo, scheduleService)
+	studentPortalService := stportal.NewService(membershipRepo, scheduleService, gradeService, attendanceService)
 	roomService := roomsvc.NewService(roomRepo)
 	paymentService := paymentsvc.NewService(paymentRepo, groupRepo, userRepo, membershipRepo)
 	dashboardService := dashboardsvc.NewService(dashboardStatsRepo)
@@ -100,7 +105,7 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 	aiAnalyticsService := aianalyticssvc.NewService(aiProvider, aiPrompts, aiContextRepo, dashboardStatsRepo, userRepo, teacherLinkRepo)
 	ctr := NewContainer(cfg, log, db, jwtMgr, authService, userService, teacherService, groupService, scheduleService, attendanceService, gradeService, roomService, paymentService, dashboardService, fileService, notificationService, aiAnalyticsService)
 
-	authHandler := handler.NewAuthHandler(authService)
+	authHandler := handler.NewAuthHandler(authService, cfg.RequireLoginPortal)
 	userHandler := handler.NewUserHandler(userService)
 	teacherHandler := handler.NewTeacherHandler(teacherService)
 	groupHandler := handler.NewGroupHandler(groupService)
@@ -113,6 +118,8 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 	fileHandler := handler.NewFileHandler(fileService, cfg.Storage)
 	notificationHandler := handler.NewNotificationHandler(notificationService)
 	aiAnalyticsHandler := handler.NewAIAnalyticsHandler(aiAnalyticsService)
+	teacherPortalHandler := handler.NewTeacherPortalHandler(teacherPortalService)
+	studentPortalHandler := handler.NewStudentPortalHandler(studentPortalService)
 	engine := httpdelivery.NewRouter(cfg, log, db, &httpdelivery.RouteDeps{
 		Auth:           authHandler,
 		User:           userHandler,
@@ -127,6 +134,8 @@ func New(cfg *config.Config, log *slog.Logger) (*App, error) {
 		File:           fileHandler,
 		Notification:   notificationHandler,
 		AIAnalytics:    aiAnalyticsHandler,
+		TeacherPortal:  teacherPortalHandler,
+		StudentPortal:  studentPortalHandler,
 		AuthMiddleware: middleware.AuthRequired(jwtMgr),
 	})
 	srv := &http.Server{

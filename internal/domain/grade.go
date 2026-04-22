@@ -12,6 +12,7 @@ type Grade struct {
 	StudentID     uuid.UUID
 	TeacherID     uuid.UUID // group's assigned teacher (teachers.id)
 	GroupID       uuid.UUID
+	SubjectID     uuid.UUID
 	WeekStartDate time.Time // Monday UTC; defines the rating week
 	GradeType     GradeType
 	GradeValue    float64

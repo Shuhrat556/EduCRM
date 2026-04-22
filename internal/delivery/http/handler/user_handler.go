@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/educrm/educrm-backend/internal/apperror"
 	"github.com/educrm/educrm-backend/internal/delivery/http/dto"
@@ -39,7 +40,7 @@ func NewUserHandler(svc *usersvc.Service) *UserHandler {
 // @Failure 500 {object} response.Envelope
 // @Router /api/v1/users [post]
 func (h *UserHandler) Create(c *gin.Context) {
-	actor, err := ActorRole(c)
+	actor, actorID, err := ParseActor(c)
 	if err != nil {
 		response.Error(c, err)
 		return
@@ -54,11 +55,16 @@ func (h *UserHandler) Create(c *gin.Context) {
 		response.Error(c, apperror.Validation("role", "Role must be a valid value (e.g. teacher, student, admin, super_admin)"))
 		return
 	}
+	createdBy := actorID
 	out, err := h.svc.Create(c.Request.Context(), actor, usersvc.CreateInput{
-		Email:    req.Email,
-		Phone:    req.Phone,
-		Password: req.Password,
-		Role:     role,
+		FullName:            strings.TrimSpace(req.FullName),
+		Username:            req.Username,
+		Email:               req.Email,
+		Phone:               req.Phone,
+		Password:            req.Password,
+		Role:                role,
+		ForcePasswordChange: req.ForcePasswordChange,
+		CreatedByUserID:     &createdBy,
 	})
 	if err != nil {
 		response.Error(c, err)
@@ -185,6 +191,8 @@ func (h *UserHandler) Update(c *gin.Context) {
 		return
 	}
 	out, err := h.svc.Update(c.Request.Context(), actor, actorID, id, usersvc.UpdateInput{
+		FullName: req.FullName,
+		Username: req.Username,
 		Email:    req.Email,
 		Phone:    req.Phone,
 		Password: req.Password,

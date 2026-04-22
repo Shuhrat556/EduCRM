@@ -66,6 +66,9 @@ func (h *GradeHandler) Create(c *gin.Context) {
 		GradeValue: req.GradeValue,
 		Comment:    req.Comment,
 	}
+	if req.SubjectID != nil {
+		in.SubjectID = *req.SubjectID
+	}
 	if req.WeekOf != nil && *req.WeekOf != "" {
 		d, err := dto.ParseISODate(*req.WeekOf)
 		if err != nil {

@@ -24,7 +24,7 @@ func NewUserRepository(db *gorm.DB) *UserRepository {
 	return &UserRepository{db: db}
 }
 
-// FindByLogin resolves login as email (case-insensitive) if it contains "@", otherwise phone (trimmed).
+// FindByLogin resolves login as: email if "@"; else username (case-insensitive); else phone.
 // Only active users can authenticate.
 func (r *UserRepository) FindByLogin(ctx context.Context, login string) (*domain.User, error) {
 	login = strings.TrimSpace(login)
@@ -33,10 +33,11 @@ func (r *UserRepository) FindByLogin(ctx context.Context, login string) (*domain
 	}
 	var m model.User
 	q := r.db.WithContext(ctx).Where("is_active = ?", true)
-	if strings.Contains(login, "@") {
+	switch {
+	case strings.Contains(login, "@"):
 		q = q.Where("LOWER(email) = ?", strings.ToLower(login))
-	} else {
-		q = q.Where("phone = ?", login)
+	default:
+		q = q.Where("LOWER(username) = ? OR phone = ?", strings.ToLower(login), login)
 	}
 	if err := q.First(&m).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -82,12 +83,15 @@ func (r *UserRepository) Update(ctx context.Context, u *domain.User) error {
 		return err
 	}
 	err = r.db.WithContext(ctx).Model(&model.User{}).Where("id = ?", u.ID).Updates(map[string]any{
-		"email":         m.Email,
-		"phone":         m.Phone,
-		"password_hash": m.PasswordHash,
-		"role":          m.Role,
-		"is_active":     m.IsActive,
-		"updated_at":    m.UpdatedAt,
+		"full_name":               m.FullName,
+		"username":                m.Username,
+		"email":                   m.Email,
+		"phone":                   m.Phone,
+		"password_hash":           m.PasswordHash,
+		"role":                    m.Role,
+		"is_active":               m.IsActive,
+		"force_password_change":   m.ForcePasswordChange,
+		"updated_at":              m.UpdatedAt,
 	}).Error
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -117,8 +121,9 @@ func (r *UserRepository) List(ctx context.Context, p repository.UserListParams) 
 		if p.Search != "" {
 			term := "%" + escapeLikePattern(p.Search) + "%"
 			q = q.Where(
-				"(LOWER(COALESCE(email, '')) LIKE LOWER(?) ESCAPE '\\' OR COALESCE(phone, '') LIKE ? ESCAPE '\\')",
-				term, term,
+				"(LOWER(COALESCE(email, '')) LIKE LOWER(?) ESCAPE '\\' OR COALESCE(phone, '') LIKE ? ESCAPE '\\' "+
+					"OR LOWER(COALESCE(username, '')) LIKE LOWER(?) ESCAPE '\\' OR LOWER(full_name) LIKE LOWER(?) ESCAPE '\\')",
+				term, term, term, term,
 			)
 		}
 		if p.Role != nil {
@@ -198,6 +203,23 @@ func (r *UserRepository) PhoneTaken(ctx context.Context, phone string, excludeID
 	return n > 0, nil
 }
 
+// UsernameTaken reports whether another user owns this username (case-insensitive).
+func (r *UserRepository) UsernameTaken(ctx context.Context, username string, excludeID *uuid.UUID) (bool, error) {
+	username = strings.TrimSpace(strings.ToLower(username))
+	if username == "" {
+		return false, nil
+	}
+	q := r.db.WithContext(ctx).Model(&model.User{}).Where("LOWER(username) = ?", username)
+	if excludeID != nil {
+		q = q.Where("id <> ?", *excludeID)
+	}
+	var n int64
+	if err := q.Count(&n).Error; err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 func escapeLikePattern(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `%`, `\%`)
@@ -211,26 +233,34 @@ func userToDomain(m *model.User) (*domain.User, error) {
 		return nil, err
 	}
 	return &domain.User{
-		ID:           m.ID,
-		Email:        m.Email,
-		Phone:        m.Phone,
-		PasswordHash: m.PasswordHash,
-		Role:         role,
-		IsActive:     m.IsActive,
-		CreatedAt:    m.CreatedAt,
-		UpdatedAt:    m.UpdatedAt,
+		ID:                  m.ID,
+		FullName:            m.FullName,
+		Username:            m.Username,
+		Email:               m.Email,
+		Phone:               m.Phone,
+		PasswordHash:        m.PasswordHash,
+		Role:                role,
+		IsActive:            m.IsActive,
+		ForcePasswordChange: m.ForcePasswordChange,
+		CreatedByUserID:     m.CreatedByUserID,
+		CreatedAt:           m.CreatedAt,
+		UpdatedAt:           m.UpdatedAt,
 	}, nil
 }
 
 func domainToModel(u *domain.User) (*model.User, error) {
 	return &model.User{
-		ID:           u.ID,
-		Email:        u.Email,
-		Phone:        u.Phone,
-		PasswordHash: u.PasswordHash,
-		Role:         string(u.Role),
-		IsActive:     u.IsActive,
-		CreatedAt:    u.CreatedAt,
-		UpdatedAt:    u.UpdatedAt,
+		ID:                  u.ID,
+		FullName:            u.FullName,
+		Username:            u.Username,
+		Email:               u.Email,
+		Phone:               u.Phone,
+		PasswordHash:        u.PasswordHash,
+		Role:                string(u.Role),
+		IsActive:            u.IsActive,
+		ForcePasswordChange: u.ForcePasswordChange,
+		CreatedByUserID:     u.CreatedByUserID,
+		CreatedAt:           u.CreatedAt,
+		UpdatedAt:           u.UpdatedAt,
 	}, nil
 }

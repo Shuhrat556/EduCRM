@@ -11,6 +11,7 @@ type Attendance struct {
 	ID                  uuid.UUID
 	StudentID           uuid.UUID
 	GroupID             uuid.UUID
+	SubjectID           uuid.UUID
 	LessonDate          time.Time // calendar date (UTC)
 	Status              AttendanceStatus
 	Comment             *string

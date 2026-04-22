@@ -49,6 +49,9 @@ func (s *httpTestUsers) EmailTaken(ctx context.Context, email string, excludeID 
 func (s *httpTestUsers) PhoneTaken(ctx context.Context, phone string, excludeID *uuid.UUID) (bool, error) {
 	return false, nil
 }
+func (s *httpTestUsers) UsernameTaken(ctx context.Context, username string, excludeID *uuid.UUID) (bool, error) {
+	return false, nil
+}
 
 type httpTestRefresh struct {
 	byHash map[string]uuid.UUID
@@ -97,7 +100,7 @@ func TestAuthHandler_Login_table(t *testing.T) {
 	}
 	refresh := &httpTestRefresh{byHash: map[string]uuid.UUID{}}
 	svc := auth.NewService(users, refresh, testJWTManager(t), 24*time.Hour)
-	h := NewAuthHandler(svc)
+	h := NewAuthHandler(svc, false)
 
 	tests := []struct {
 		name       string
@@ -167,7 +170,7 @@ func TestAuthHandler_Me_withJWT(t *testing.T) {
 		},
 	}
 	svc := auth.NewService(users, &httpTestRefresh{}, jwtMgr, time.Hour)
-	h := NewAuthHandler(svc)
+	h := NewAuthHandler(svc, false)
 	tok, err := jwtMgr.GenerateAccessToken(uid.String(), string(domain.RoleStudent))
 	if err != nil {
 		t.Fatal(err)
@@ -184,3 +187,61 @@ func TestAuthHandler_Me_withJWT(t *testing.T) {
 }
 
 func strPtrHTTP(s string) *string { return &s }
+
+func TestAuthHandler_Login_requirePortal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	uid := uuid.New()
+	hash, err := bcrypt.GenerateFromPassword([]byte("password12345"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	users := &httpTestUsers{
+		byLogin: map[string]*domain.User{
+			"teacher@school.edu": {
+				ID: uid, Email: strPtrHTTP("teacher@school.edu"), PasswordHash: string(hash),
+				Role: domain.RoleTeacher, IsActive: true,
+			},
+		},
+		byID: map[uuid.UUID]*domain.User{
+			uid: {ID: uid, Email: strPtrHTTP("teacher@school.edu"), PasswordHash: string(hash), Role: domain.RoleTeacher, IsActive: true},
+		},
+	}
+	svc := auth.NewService(users, &httpTestRefresh{byHash: map[string]uuid.UUID{}}, testJWTManager(t), 24*time.Hour)
+	h := NewAuthHandler(svc, true)
+
+	r := gin.New()
+	r.POST("/login", h.Login)
+
+	t.Run("missing portal", func(t *testing.T) {
+		b, _ := json.Marshal(dto.LoginRequest{Login: "teacher@school.edu", Password: "password12345"})
+		req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status %d body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("wrong portal", func(t *testing.T) {
+		b, _ := json.Marshal(dto.LoginRequest{Login: "teacher@school.edu", Password: "password12345", Portal: "student"})
+		req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("status %d body=%s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("matching portal", func(t *testing.T) {
+		b, _ := json.Marshal(dto.LoginRequest{Login: "teacher@school.edu", Password: "password12345", Portal: "teacher"})
+		req := httptest.NewRequest(http.MethodPost, "/login", bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status %d body=%s", w.Code, w.Body.String())
+		}
+	})
+}

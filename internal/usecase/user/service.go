@@ -3,6 +3,7 @@ package user
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/educrm/educrm-backend/internal/apperror"
@@ -25,13 +26,16 @@ func NewService(repo repository.UserRepository) *Service {
 
 // UserPublic is a safe projection for APIs.
 type UserPublic struct {
-	ID        uuid.UUID   `json:"id"`
-	Email     *string     `json:"email,omitempty"`
-	Phone     *string     `json:"phone,omitempty"`
-	Role      domain.Role `json:"role"`
-	IsActive  bool        `json:"is_active"`
-	CreatedAt time.Time   `json:"created_at"`
-	UpdatedAt time.Time   `json:"updated_at"`
+	ID                  uuid.UUID   `json:"id"`
+	FullName            string      `json:"full_name"`
+	Username            *string     `json:"username,omitempty"`
+	Email               *string     `json:"email,omitempty"`
+	Phone               *string     `json:"phone,omitempty"`
+	Role                domain.Role `json:"role"`
+	IsActive            bool        `json:"is_active"`
+	ForcePasswordChange bool        `json:"force_password_change"`
+	CreatedAt           time.Time   `json:"created_at"`
+	UpdatedAt           time.Time   `json:"updated_at"`
 }
 
 // ListResult is a paginated user list.
@@ -44,14 +48,20 @@ type ListResult struct {
 
 // CreateInput holds validated fields for user creation.
 type CreateInput struct {
-	Email    *string
-	Phone    *string
-	Password string
-	Role     domain.Role
+	FullName            string
+	Username            *string
+	Email               *string
+	Phone               *string
+	Password            string
+	Role                domain.Role
+	ForcePasswordChange bool
+	CreatedByUserID     *uuid.UUID
 }
 
 // UpdateInput holds optional field updates.
 type UpdateInput struct {
+	FullName *string
+	Username *string
 	Email    *string
 	Phone    *string
 	Password *string
@@ -66,10 +76,11 @@ func (s *Service) Create(ctx context.Context, actor domain.Role, in CreateInput)
 	}
 	email := domain.NormalizeEmail(in.Email)
 	phone := domain.NormalizePhone(in.Phone)
-	if email == nil && phone == nil {
-		return nil, apperror.Validation("contact", "at least one of email or phone is required")
+	username := domain.NormalizeUsername(in.Username)
+	if email == nil && phone == nil && username == nil {
+		return nil, apperror.Validation("contact", "at least one of username, email, or phone is required")
 	}
-	if err := s.assertUniqueContact(ctx, email, phone, nil); err != nil {
+	if err := s.assertUniqueContact(ctx, email, phone, username, nil); err != nil {
 		return nil, err
 	}
 	hash, err := authpkg.HashPassword(in.Password)
@@ -77,15 +88,20 @@ func (s *Service) Create(ctx context.Context, actor domain.Role, in CreateInput)
 		return nil, apperror.Internal("hash password").Wrap(err)
 	}
 	now := time.Now().UTC()
+	fn := strings.TrimSpace(in.FullName)
 	u := &domain.User{
-		ID:           uuid.New(),
-		Email:        email,
-		Phone:        phone,
-		PasswordHash: hash,
-		Role:         in.Role,
-		IsActive:     true,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:                  uuid.New(),
+		FullName:            fn,
+		Username:            username,
+		Email:               email,
+		Phone:               phone,
+		PasswordHash:        hash,
+		Role:                in.Role,
+		IsActive:            true,
+		ForcePasswordChange: in.ForcePasswordChange,
+		CreatedByUserID:     in.CreatedByUserID,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}
 	if err := s.repo.Create(ctx, u); err != nil {
 		return nil, wrapUserRepoErr(err)
@@ -167,14 +183,20 @@ func (s *Service) Update(ctx context.Context, actor domain.Role, actorUserID, id
 	if err := AssertActorCanAccessTargetUser(actor, newRole); err != nil {
 		return nil, apperror.Forbidden("insufficient permissions for the requested role")
 	}
+	if in.FullName != nil {
+		u.FullName = strings.TrimSpace(*in.FullName)
+	}
+	if in.Username != nil {
+		u.Username = domain.NormalizeUsername(in.Username)
+	}
 	if in.Email != nil {
 		u.Email = domain.NormalizeEmail(in.Email)
 	}
 	if in.Phone != nil {
 		u.Phone = domain.NormalizePhone(in.Phone)
 	}
-	if u.Email == nil && u.Phone == nil {
-		return nil, apperror.Validation("contact", "at least one of email or phone is required")
+	if u.Email == nil && u.Phone == nil && u.Username == nil {
+		return nil, apperror.Validation("contact", "at least one of username, email, or phone is required")
 	}
 	if in.Password != nil && *in.Password != "" {
 		hash, herr := authpkg.HashPassword(*in.Password)
@@ -191,7 +213,7 @@ func (s *Service) Update(ctx context.Context, actor domain.Role, actorUserID, id
 		u.IsActive = *in.IsActive
 	}
 	u.UpdatedAt = time.Now().UTC()
-	if err := s.assertUniqueContact(ctx, u.Email, u.Phone, &u.ID); err != nil {
+	if err := s.assertUniqueContact(ctx, u.Email, u.Phone, u.Username, &u.ID); err != nil {
 		return nil, err
 	}
 	if err := s.repo.Update(ctx, u); err != nil {
@@ -247,7 +269,7 @@ func (s *Service) Delete(ctx context.Context, actor domain.Role, actorID uuid.UU
 	return nil
 }
 
-func (s *Service) assertUniqueContact(ctx context.Context, email, phone *string, excludeID *uuid.UUID) error {
+func (s *Service) assertUniqueContact(ctx context.Context, email, phone, username *string, excludeID *uuid.UUID) error {
 	if email != nil {
 		taken, err := s.repo.EmailTaken(ctx, *email, excludeID)
 		if err != nil {
@@ -266,6 +288,15 @@ func (s *Service) assertUniqueContact(ctx context.Context, email, phone *string,
 			return apperror.Conflict("phone_taken", "phone is already in use")
 		}
 	}
+	if username != nil {
+		taken, err := s.repo.UsernameTaken(ctx, *username, excludeID)
+		if err != nil {
+			return apperror.Internal("check username").Wrap(err)
+		}
+		if taken {
+			return apperror.Conflict("username_taken", "username is already in use")
+		}
+	}
 	return nil
 }
 
@@ -281,12 +312,15 @@ func wrapUserRepoErr(err error) error {
 
 func publicPtr(u *domain.User) *UserPublic {
 	return &UserPublic{
-		ID:        u.ID,
-		Email:     u.Email,
-		Phone:     u.Phone,
-		Role:      u.Role,
-		IsActive:  u.IsActive,
-		CreatedAt: u.CreatedAt,
-		UpdatedAt: u.UpdatedAt,
+		ID:                  u.ID,
+		FullName:            u.FullName,
+		Username:            u.Username,
+		Email:               u.Email,
+		Phone:               u.Phone,
+		Role:                u.Role,
+		IsActive:            u.IsActive,
+		ForcePasswordChange: u.ForcePasswordChange,
+		CreatedAt:           u.CreatedAt,
+		UpdatedAt:           u.UpdatedAt,
 	}
 }

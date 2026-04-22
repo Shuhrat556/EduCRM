@@ -58,11 +58,29 @@ func (s *gradeStubUsers) EmailTaken(ctx context.Context, email string, excludeID
 func (s *gradeStubUsers) PhoneTaken(ctx context.Context, phone string, excludeID *uuid.UUID) (bool, error) {
 	return false, nil
 }
+func (s *gradeStubUsers) UsernameTaken(ctx context.Context, username string, excludeID *uuid.UUID) (bool, error) {
+	return false, nil
+}
+
+type gradeStubAssign struct{}
+
+func (gradeStubAssign) Exists(ctx context.Context, teacherID, groupID, subjectID uuid.UUID) (bool, error) {
+	return true, nil
+}
+func (gradeStubAssign) HasAnyAssignmentOnGroup(ctx context.Context, teacherID, groupID uuid.UUID) (bool, error) {
+	return true, nil
+}
+func (gradeStubAssign) ListByTeacher(ctx context.Context, teacherID uuid.UUID) ([]repository.TeacherAssignmentRow, error) {
+	return nil, nil
+}
 
 type gradeStubMem struct{ gid uuid.UUID }
 
 func (s *gradeStubMem) FindGroupIDByStudentUserID(ctx context.Context, studentUserID uuid.UUID) (*uuid.UUID, error) {
 	return &s.gid, nil
+}
+func (s *gradeStubMem) ListStudentUserIDsByGroup(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
 }
 
 type gradeStubLinks struct{}
@@ -76,6 +94,7 @@ func TestCreate_duplicateReturnsConflict(t *testing.T) {
 	studentID, groupID, teacherID := uuid.New(), uuid.New(), uuid.New()
 	svc := NewService(
 		&gradeStubRepo{createErr: repository.ErrDuplicate},
+		gradeStubAssign{},
 		&gradeStubGroups{g: &domain.Group{ID: groupID, TeacherID: teacherID}},
 		&gradeStubUsers{u: &domain.User{ID: studentID, Role: domain.RoleStudent}},
 		&gradeStubMem{gid: groupID},
@@ -101,6 +120,7 @@ func TestCreate_invalidGradeValue(t *testing.T) {
 	studentID, groupID, teacherID := uuid.New(), uuid.New(), uuid.New()
 	svc := NewService(
 		&gradeStubRepo{},
+		gradeStubAssign{},
 		&gradeStubGroups{g: &domain.Group{ID: groupID, TeacherID: teacherID}},
 		&gradeStubUsers{u: &domain.User{ID: studentID, Role: domain.RoleStudent}},
 		&gradeStubMem{gid: groupID},
@@ -123,7 +143,7 @@ func TestCreate_invalidGradeValue(t *testing.T) {
 
 func TestList_studentCannotUseGroupFilter(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(&gradeStubRepo{}, &gradeStubGroups{}, &gradeStubUsers{}, &gradeStubMem{}, &gradeStubLinks{})
+	svc := NewService(&gradeStubRepo{}, gradeStubAssign{}, &gradeStubGroups{}, &gradeStubUsers{}, &gradeStubMem{}, &gradeStubLinks{})
 	gid := uuid.New()
 	_, err := svc.List(ctx, domain.RoleStudent, uuid.New(), ListFilter{GroupID: &gid})
 	if err == nil {

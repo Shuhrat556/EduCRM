@@ -48,6 +48,9 @@ func (s *stubUserRepo) EmailTaken(ctx context.Context, email string, excludeID *
 func (s *stubUserRepo) PhoneTaken(ctx context.Context, phone string, excludeID *uuid.UUID) (bool, error) {
 	return false, nil
 }
+func (s *stubUserRepo) UsernameTaken(ctx context.Context, username string, excludeID *uuid.UUID) (bool, error) {
+	return false, nil
+}
 
 type stubRefreshRepo struct {
 	byHash map[string]uuid.UUID

@@ -33,3 +33,14 @@ func (r *StudentMembershipRepository) FindGroupIDByStudentUserID(ctx context.Con
 	}
 	return &m.GroupID, nil
 }
+
+// ListStudentUserIDsByGroup implements repository.StudentMembershipRepository.
+func (r *StudentMembershipRepository) ListStudentUserIDsByGroup(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	if err := r.db.WithContext(ctx).Model(&model.StudentGroupMembership{}).
+		Where("group_id = ?", groupID).
+		Pluck("user_id", &ids).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
+}

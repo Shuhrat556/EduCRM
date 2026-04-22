@@ -16,6 +16,7 @@ import (
 // Service orchestrates attendance use cases.
 type Service struct {
 	attendance  repository.AttendanceRepository
+	assignments repository.TeacherAssignmentRepository
 	groups      repository.GroupRepository
 	users       repository.UserRepository
 	memberships repository.StudentMembershipRepository
@@ -25,6 +26,7 @@ type Service struct {
 // NewService constructs an attendance service.
 func NewService(
 	attendance repository.AttendanceRepository,
+	assignments repository.TeacherAssignmentRepository,
 	groups repository.GroupRepository,
 	users repository.UserRepository,
 	memberships repository.StudentMembershipRepository,
@@ -32,6 +34,7 @@ func NewService(
 ) *Service {
 	return &Service{
 		attendance:  attendance,
+		assignments: assignments,
 		groups:      groups,
 		users:       users,
 		memberships: memberships,
@@ -43,6 +46,7 @@ func NewService(
 type CreateInput struct {
 	StudentID  uuid.UUID
 	GroupID    uuid.UUID
+	SubjectID  uuid.UUID // optional zero = group's subject_id
 	LessonDate time.Time
 	Status     domain.AttendanceStatus
 	Comment    *string
@@ -75,7 +79,11 @@ func (s *Service) Create(ctx context.Context, actorRole domain.Role, actorUserID
 	if g == nil {
 		return nil, apperror.Validation("group_id", "group not found")
 	}
-	if err := s.ensureCanModifyGroup(actorRole, filter, g.TeacherID); err != nil {
+	subjectID := in.SubjectID
+	if subjectID == uuid.Nil {
+		subjectID = g.SubjectID
+	}
+	if err := s.ensureTeacherSubjectAccess(ctx, actorRole, filter, in.GroupID, subjectID); err != nil {
 		return nil, err
 	}
 	student, err := s.users.FindByID(ctx, in.StudentID)
@@ -95,40 +103,83 @@ func (s *Service) Create(ctx context.Context, actorRole domain.Role, actorUserID
 	if memGroup == nil || *memGroup != in.GroupID {
 		return nil, apperror.Validation("student_id", "student is not enrolled in this group")
 	}
+	markedBy := g.TeacherID
+	if actorRole == domain.RoleTeacher && filter != nil {
+		markedBy = *filter
+	}
 	lessonDate := truncateUTCDate(in.LessonDate)
 	now := time.Now().UTC()
 	row := &domain.Attendance{
 		ID:                uuid.New(),
 		StudentID:         in.StudentID,
 		GroupID:           in.GroupID,
+		SubjectID:         subjectID,
 		LessonDate:        lessonDate,
 		Status:            in.Status,
 		Comment:           trimComment(in.Comment),
-		MarkedByTeacherID: g.TeacherID,
+		MarkedByTeacherID: markedBy,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
 	if err := s.attendance.Create(ctx, row); err != nil {
 		if errors.Is(err, repository.ErrDuplicate) {
-			return nil, apperror.Conflict("attendance_exists", "attendance already recorded for this student, group, and lesson date")
+			return nil, apperror.Conflict("attendance_exists", "attendance already recorded for this student, group, subject, and lesson date")
 		}
 		return nil, apperror.Internal("create attendance").Wrap(err)
 	}
 	return row, nil
 }
 
+func (s *Service) ensureAttendanceStudentInGroup(ctx context.Context, studentUserID, groupID uuid.UUID) error {
+	memGroup, err := s.memberships.FindGroupIDByStudentUserID(ctx, studentUserID)
+	if err != nil {
+		return apperror.Internal("load enrollment").Wrap(err)
+	}
+	if memGroup == nil || *memGroup != groupID {
+		return apperror.New(apperror.KindForbidden, "student_not_in_group", "student is not enrolled in this group; cannot access this attendance record")
+	}
+	return nil
+}
+
+func (s *Service) ensureTeacherSubjectAccess(ctx context.Context, actorRole domain.Role, filter *uuid.UUID, groupID, subjectID uuid.UUID) error {
+	switch actorRole {
+	case domain.RoleSuperAdmin, domain.RoleAdmin:
+		return nil
+	case domain.RoleTeacher:
+		if filter == nil {
+			return apperror.New(apperror.KindForbidden, "teacher_not_linked", "teacher profile required")
+		}
+		ok, err := s.assignments.Exists(ctx, *filter, groupID, subjectID)
+		if err != nil {
+			return apperror.Internal("assignment check").Wrap(err)
+		}
+		if !ok {
+			return apperror.New(apperror.KindForbidden, "not_assigned_subject", "you are not assigned to teach this subject in this group")
+		}
+		return nil
+	default:
+		return apperror.New(apperror.KindForbidden, "insufficient_permissions", "only admin or teacher may access attendance")
+	}
+}
+
 // GetByID returns one row if the actor may view it.
 func (s *Service) GetByID(ctx context.Context, actorRole domain.Role, actorUserID uuid.UUID, id uuid.UUID) (*domain.Attendance, error) {
-	filter, err := s.teacherFilter(ctx, actorRole, actorUserID)
-	if err != nil {
-		return nil, err
-	}
 	row, err := s.attendance.FindByID(ctx, id)
 	if err != nil {
 		return nil, apperror.Internal("load attendance").Wrap(err)
 	}
 	if row == nil {
 		return nil, apperror.NotFound("attendance")
+	}
+	if actorRole == domain.RoleStudent {
+		if row.StudentID != actorUserID {
+			return nil, apperror.New(apperror.KindForbidden, "cannot_view_attendance", "students may only view their own attendance")
+		}
+		return row, nil
+	}
+	filter, err := s.teacherFilter(ctx, actorRole, actorUserID)
+	if err != nil {
+		return nil, err
 	}
 	g, err := s.groups.FindByID(ctx, row.GroupID)
 	if err != nil {
@@ -137,14 +188,28 @@ func (s *Service) GetByID(ctx context.Context, actorRole domain.Role, actorUserI
 	if g == nil {
 		return nil, apperror.NotFound("attendance")
 	}
-	if err := s.ensureCanViewGroup(actorRole, filter, g.TeacherID); err != nil {
+	if err := s.ensureViewGroupSubject(ctx, actorRole, filter, row.GroupID, row.SubjectID); err != nil {
 		return nil, err
+	}
+	if actorRole == domain.RoleTeacher && filter != nil {
+		if err := s.ensureAttendanceStudentInGroup(ctx, row.StudentID, row.GroupID); err != nil {
+			return nil, err
+		}
 	}
 	return row, nil
 }
 
 // List returns attendance for one of: student, group, or date range.
 func (s *Service) List(ctx context.Context, actorRole domain.Role, actorUserID uuid.UUID, f ListFilter) ([]domain.Attendance, error) {
+	if actorRole == domain.RoleStudent {
+		if f.StudentID == nil || *f.StudentID != actorUserID {
+			return nil, apperror.New(apperror.KindForbidden, "cannot_view_attendance", "students may only view their own attendance")
+		}
+		if f.GroupID != nil || f.From != nil || f.To != nil {
+			return nil, apperror.Validation("filter", "students must query by student_id only (their own id)")
+		}
+		return s.attendance.ListByStudent(ctx, actorUserID, nil)
+	}
 	filter, err := s.teacherFilter(ctx, actorRole, actorUserID)
 	if err != nil {
 		return nil, err
@@ -178,12 +243,12 @@ func (s *Service) List(ctx context.Context, actorRole domain.Role, actorUserID u
 			if stuGroup == nil {
 				return nil, apperror.New(apperror.KindForbidden, "cannot_view_student", "student has no group enrollment")
 			}
-			g, err := s.groups.FindByID(ctx, *stuGroup)
+			ok, err := s.assignments.HasAnyAssignmentOnGroup(ctx, *filter, *stuGroup)
 			if err != nil {
-				return nil, apperror.Internal("load group").Wrap(err)
+				return nil, apperror.Internal("assignment check").Wrap(err)
 			}
-			if g == nil || g.TeacherID != *filter {
-				return nil, apperror.New(apperror.KindForbidden, "cannot_view_student", "you can only view students in your groups")
+			if !ok {
+				return nil, apperror.New(apperror.KindForbidden, "cannot_view_student", "you can only view students in your assigned groups")
 			}
 		}
 		return s.attendance.ListByStudent(ctx, *f.StudentID, filter)
@@ -195,8 +260,14 @@ func (s *Service) List(ctx context.Context, actorRole domain.Role, actorUserID u
 		if g == nil {
 			return nil, apperror.Validation("group_id", "group not found")
 		}
-		if err := s.ensureCanViewGroup(actorRole, filter, g.TeacherID); err != nil {
-			return nil, err
+		if filter != nil {
+			ok, err := s.assignments.HasAnyAssignmentOnGroup(ctx, *filter, g.ID)
+			if err != nil {
+				return nil, apperror.Internal("assignment check").Wrap(err)
+			}
+			if !ok {
+				return nil, apperror.New(apperror.KindForbidden, "not_assigned_group", "you have no teaching assignment in this group")
+			}
 		}
 		return s.attendance.ListByGroup(ctx, *f.GroupID, filter)
 	default:
@@ -229,7 +300,10 @@ func (s *Service) Update(ctx context.Context, actorRole domain.Role, actorUserID
 	if g == nil {
 		return nil, apperror.NotFound("attendance")
 	}
-	if err := s.ensureCanModifyGroup(actorRole, filter, g.TeacherID); err != nil {
+	if err := s.ensureTeacherSubjectAccess(ctx, actorRole, filter, row.GroupID, row.SubjectID); err != nil {
+		return nil, err
+	}
+	if err := s.ensureAttendanceStudentInGroup(ctx, row.StudentID, row.GroupID); err != nil {
 		return nil, err
 	}
 	if in.Status != nil {
@@ -248,6 +322,16 @@ func (s *Service) Update(ctx context.Context, actorRole domain.Role, actorUserID
 	return row, nil
 }
 
+func (s *Service) ensureViewGroupSubject(ctx context.Context, actorRole domain.Role, filter *uuid.UUID, groupID, subjectID uuid.UUID) error {
+	if actorRole == domain.RoleSuperAdmin || actorRole == domain.RoleAdmin {
+		return nil
+	}
+	if actorRole == domain.RoleTeacher {
+		return s.ensureTeacherSubjectAccess(ctx, actorRole, filter, groupID, subjectID)
+	}
+	return apperror.New(apperror.KindForbidden, "insufficient_permissions", "only admin or teacher may access attendance")
+}
+
 // teacherFilter returns nil for admins (no SQL restriction), or linked teacher id for teachers.
 func (s *Service) teacherFilter(ctx context.Context, actorRole domain.Role, actorUserID uuid.UUID) (*uuid.UUID, error) {
 	switch actorRole {
@@ -264,32 +348,6 @@ func (s *Service) teacherFilter(ctx context.Context, actorRole domain.Role, acto
 		return tid, nil
 	default:
 		return nil, apperror.New(apperror.KindForbidden, "insufficient_permissions", "only admin or teacher may access attendance")
-	}
-}
-
-func (s *Service) ensureCanModifyGroup(actorRole domain.Role, filter *uuid.UUID, groupTeacherID uuid.UUID) error {
-	return s.ensureGroupAccess(actorRole, filter, groupTeacherID, true)
-}
-
-func (s *Service) ensureCanViewGroup(actorRole domain.Role, filter *uuid.UUID, groupTeacherID uuid.UUID) error {
-	return s.ensureGroupAccess(actorRole, filter, groupTeacherID, false)
-}
-
-func (s *Service) ensureGroupAccess(actorRole domain.Role, filter *uuid.UUID, groupTeacherID uuid.UUID, modify bool) error {
-	switch actorRole {
-	case domain.RoleSuperAdmin, domain.RoleAdmin:
-		return nil
-	case domain.RoleTeacher:
-		if filter == nil || *filter != groupTeacherID {
-			verb := "view"
-			if modify {
-				verb = "modify"
-			}
-			return apperror.New(apperror.KindForbidden, "not_group_teacher", "you can only "+verb+" attendance for your assigned groups")
-		}
-		return nil
-	default:
-		return apperror.New(apperror.KindForbidden, "insufficient_permissions", "only admin or teacher may access attendance")
 	}
 }
 

@@ -12,6 +12,7 @@ type Attendance struct {
 	ID                  uuid.UUID  `gorm:"type:uuid;primaryKey"`
 	StudentID           uuid.UUID  `gorm:"type:uuid;not null;uniqueIndex:ux_attendance_slot"`
 	GroupID             uuid.UUID  `gorm:"type:uuid;not null;uniqueIndex:ux_attendance_slot"`
+	SubjectID           uuid.UUID  `gorm:"type:uuid;not null;uniqueIndex:ux_attendance_slot;index"`
 	LessonDate          time.Time  `gorm:"type:date;not null;uniqueIndex:ux_attendance_slot"`
 	Status              string     `gorm:"not null;size:16"`
 	Comment             *string    `gorm:"type:text"`

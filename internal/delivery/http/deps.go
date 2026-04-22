@@ -20,5 +20,7 @@ type RouteDeps struct {
 	File           *handler.FileHandler
 	Notification   *handler.NotificationHandler
 	AIAnalytics    *handler.AIAnalyticsHandler
+	TeacherPortal  *handler.TeacherPortalHandler
+	StudentPortal  *handler.StudentPortalHandler
 	AuthMiddleware gin.HandlerFunc
 }

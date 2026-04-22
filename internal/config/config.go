@@ -23,6 +23,10 @@ type Config struct {
 	// SwaggerEnabled exposes /swagger when true. If ENABLE_SWAGGER is unset, defaults to on except in production.
 	SwaggerEnabled bool `env:"ENABLE_SWAGGER"`
 
+	// RequireLoginPortal when true (default), POST /api/v1/auth/login must send "portal" (student|admin|teacher|super_admin)
+	// so the account role matches the UI entry point. Set AUTH_REQUIRE_LOGIN_PORTAL=false only for legacy clients.
+	RequireLoginPortal bool `env:"AUTH_REQUIRE_LOGIN_PORTAL" envDefault:"true"`
+
 	HTTP      HTTPConfig
 	DB        DatabaseConfig
 	JWT       JWTConfig

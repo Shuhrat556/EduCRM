@@ -48,17 +48,40 @@ type TokenPair struct {
 	TokenType    string
 }
 
-// UserView is a safe representation of the current user.
-type UserView struct {
-	ID       uuid.UUID   `json:"id"`
-	Email    *string     `json:"email,omitempty"`
-	Phone    *string     `json:"phone,omitempty"`
-	Role     domain.Role `json:"role"`
-	IsActive bool        `json:"is_active"`
+// LoginResult is returned from portal-aware login.
+type LoginResult struct {
+	Tokens              *TokenPair
+	ForcePasswordChange bool
+	FullName            string
+	Username            *string
+	Email               *string
+	Phone               *string
+	Role                domain.Role
 }
 
-// Login validates credentials and returns tokens.
+// UserView is a safe representation of the current user.
+type UserView struct {
+	ID                  uuid.UUID   `json:"id"`
+	FullName            string      `json:"full_name"`
+	Username            *string     `json:"username,omitempty"`
+	Email               *string     `json:"email,omitempty"`
+	Phone               *string     `json:"phone,omitempty"`
+	Role                domain.Role `json:"role"`
+	IsActive            bool        `json:"is_active"`
+	ForcePasswordChange bool        `json:"force_password_change"`
+}
+
+// Login validates credentials and returns tokens (legacy; no portal check).
 func (s *Service) Login(ctx context.Context, login, password string) (*TokenPair, error) {
+	out, err := s.LoginWithRole(ctx, login, password, nil)
+	if err != nil {
+		return nil, err
+	}
+	return out.Tokens, nil
+}
+
+// LoginWithRole validates credentials. If expectedRole is non-nil, the user role must match (portal guard).
+func (s *Service) LoginWithRole(ctx context.Context, login, password string, expectedRole *domain.Role) (*LoginResult, error) {
 	u, err := s.users.FindByLogin(ctx, login)
 	if err != nil {
 		return nil, apperror.Internal("lookup user").Wrap(err)
@@ -69,10 +92,25 @@ func (s *Service) Login(ctx context.Context, login, password string) (*TokenPair
 	if !u.IsActive {
 		return nil, apperror.Unauthorized("invalid credentials")
 	}
+	if expectedRole != nil && u.Role != *expectedRole {
+		return nil, apperror.New(apperror.KindForbidden, "wrong_portal", "this account cannot sign in on this portal")
+	}
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)); err != nil {
 		return nil, apperror.Unauthorized("invalid credentials")
 	}
-	return s.issueTokens(ctx, u)
+	pair, err := s.issueTokens(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	return &LoginResult{
+		Tokens:              pair,
+		ForcePasswordChange: u.ForcePasswordChange,
+		FullName:            u.FullName,
+		Username:            u.Username,
+		Email:               u.Email,
+		Phone:               u.Phone,
+		Role:                u.Role,
+	}, nil
 }
 
 // Refresh rotates refresh token and returns a new pair.
@@ -161,12 +199,71 @@ func (s *Service) Me(ctx context.Context, userID uuid.UUID) (*UserView, error) {
 		return nil, apperror.NotFound("user")
 	}
 	return &UserView{
-		ID:       u.ID,
-		Email:    u.Email,
-		Phone:    u.Phone,
-		Role:     u.Role,
-		IsActive: u.IsActive,
+		ID:                  u.ID,
+		FullName:            u.FullName,
+		Username:            u.Username,
+		Email:               u.Email,
+		Phone:               u.Phone,
+		Role:                u.Role,
+		IsActive:            u.IsActive,
+		ForcePasswordChange: u.ForcePasswordChange,
 	}, nil
+}
+
+// ChangePassword replaces the password when the current password matches.
+func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, currentPassword, newPassword string) error {
+	if strings.TrimSpace(newPassword) == "" || len(newPassword) < 8 {
+		return apperror.Validation("new_password", "password must be at least 8 characters")
+	}
+	u, err := s.users.FindByID(ctx, userID)
+	if err != nil {
+		return apperror.Internal("load user").Wrap(err)
+	}
+	if u == nil {
+		return apperror.NotFound("user")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(currentPassword)); err != nil {
+		return apperror.New(apperror.KindForbidden, "invalid_password", "current password is incorrect")
+	}
+	hash, err := HashPassword(newPassword)
+	if err != nil {
+		return apperror.Internal("hash password").Wrap(err)
+	}
+	u.PasswordHash = hash
+	u.ForcePasswordChange = false
+	u.UpdatedAt = time.Now().UTC()
+	if err := s.users.Update(ctx, u); err != nil {
+		return apperror.Internal("update password").Wrap(err)
+	}
+	return nil
+}
+
+// FirstLoginSetPassword sets a new password when force_password_change is true (no current password).
+func (s *Service) FirstLoginSetPassword(ctx context.Context, userID uuid.UUID, newPassword string) error {
+	if strings.TrimSpace(newPassword) == "" || len(newPassword) < 8 {
+		return apperror.Validation("new_password", "password must be at least 8 characters")
+	}
+	u, err := s.users.FindByID(ctx, userID)
+	if err != nil {
+		return apperror.Internal("load user").Wrap(err)
+	}
+	if u == nil {
+		return apperror.NotFound("user")
+	}
+	if !u.ForcePasswordChange {
+		return apperror.New(apperror.KindForbidden, "password_change_not_required", "use POST /auth/change-password with your current password")
+	}
+	hash, err := HashPassword(newPassword)
+	if err != nil {
+		return apperror.Internal("hash password").Wrap(err)
+	}
+	u.PasswordHash = hash
+	u.ForcePasswordChange = false
+	u.UpdatedAt = time.Now().UTC()
+	if err := s.users.Update(ctx, u); err != nil {
+		return apperror.Internal("update password").Wrap(err)
+	}
+	return nil
 }
 
 func (s *Service) issueTokens(ctx context.Context, u *domain.User) (*TokenPair, error) {

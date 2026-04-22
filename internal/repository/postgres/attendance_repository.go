@@ -75,7 +75,7 @@ func (r *AttendanceRepository) FindByID(ctx context.Context, id uuid.UUID) (*dom
 func (r *AttendanceRepository) ListByStudent(ctx context.Context, studentID uuid.UUID, viewerTeacherID *uuid.UUID) ([]domain.Attendance, error) {
 	q := r.db.WithContext(ctx).Model(&model.Attendance{}).Where("attendances.student_id = ?", studentID)
 	if viewerTeacherID != nil {
-		q = q.Joins("JOIN groups ON groups.id = attendances.group_id AND groups.teacher_id = ?", *viewerTeacherID)
+		q = q.Joins(`JOIN teacher_group_subject_assignments tgsa ON tgsa.group_id = attendances.group_id AND tgsa.subject_id = attendances.subject_id AND tgsa.teacher_id = ?`, *viewerTeacherID)
 	}
 	var rows []model.Attendance
 	if err := q.Order("attendances.lesson_date DESC, attendances.created_at DESC").Find(&rows).Error; err != nil {
@@ -88,7 +88,7 @@ func (r *AttendanceRepository) ListByStudent(ctx context.Context, studentID uuid
 func (r *AttendanceRepository) ListByGroup(ctx context.Context, groupID uuid.UUID, viewerTeacherID *uuid.UUID) ([]domain.Attendance, error) {
 	q := r.db.WithContext(ctx).Model(&model.Attendance{}).Where("attendances.group_id = ?", groupID)
 	if viewerTeacherID != nil {
-		q = q.Joins("JOIN groups ON groups.id = attendances.group_id AND groups.teacher_id = ?", *viewerTeacherID)
+		q = q.Joins(`JOIN teacher_group_subject_assignments tgsa ON tgsa.group_id = attendances.group_id AND tgsa.subject_id = attendances.subject_id AND tgsa.teacher_id = ?`, *viewerTeacherID)
 	}
 	var rows []model.Attendance
 	if err := q.Order("attendances.lesson_date DESC, attendances.created_at DESC").Find(&rows).Error; err != nil {
@@ -104,7 +104,7 @@ func (r *AttendanceRepository) ListByDateRange(ctx context.Context, from, to tim
 	q := r.db.WithContext(ctx).Model(&model.Attendance{}).
 		Where("attendances.lesson_date >= ? AND attendances.lesson_date <= ?", fromD, toD)
 	if viewerTeacherID != nil {
-		q = q.Joins("JOIN groups ON groups.id = attendances.group_id AND groups.teacher_id = ?", *viewerTeacherID)
+		q = q.Joins(`JOIN teacher_group_subject_assignments tgsa ON tgsa.group_id = attendances.group_id AND tgsa.subject_id = attendances.subject_id AND tgsa.teacher_id = ?`, *viewerTeacherID)
 	}
 	var rows []model.Attendance
 	if err := q.Order("attendances.lesson_date ASC, attendances.group_id ASC").Find(&rows).Error; err != nil {
@@ -127,7 +127,8 @@ func attendanceToDomain(m *model.Attendance) (*domain.Attendance, error) {
 		ID:                m.ID,
 		StudentID:         m.StudentID,
 		GroupID:           m.GroupID,
-		LessonDate:          truncateUTCDate(m.LessonDate),
+		SubjectID:         m.SubjectID,
+		LessonDate:        truncateUTCDate(m.LessonDate),
 		Status:            st,
 		Comment:           m.Comment,
 		MarkedByTeacherID: m.MarkedByTeacherID,
@@ -141,6 +142,7 @@ func attendanceToModel(a *domain.Attendance) (*model.Attendance, error) {
 		ID:                a.ID,
 		StudentID:         a.StudentID,
 		GroupID:           a.GroupID,
+		SubjectID:         a.SubjectID,
 		LessonDate:        truncateUTCDate(a.LessonDate),
 		Status:            string(a.Status),
 		Comment:           a.Comment,

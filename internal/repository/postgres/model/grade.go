@@ -13,6 +13,7 @@ type Grade struct {
 	StudentID      uuid.UUID `gorm:"type:uuid;not null;index;uniqueIndex:ux_grade_weekly"`
 	TeacherID      uuid.UUID `gorm:"type:uuid;not null;index;uniqueIndex:ux_grade_weekly"`
 	GroupID        uuid.UUID `gorm:"type:uuid;not null;index;uniqueIndex:ux_grade_weekly"`
+	SubjectID      uuid.UUID `gorm:"type:uuid;not null;index;uniqueIndex:ux_grade_weekly"`
 	WeekStartDate  time.Time `gorm:"type:date;not null;uniqueIndex:ux_grade_weekly"`
 	GradeType      string    `gorm:"not null;size:32;uniqueIndex:ux_grade_weekly"`
 	GradeValue     float64   `gorm:"not null"`

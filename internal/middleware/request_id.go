@@ -6,7 +6,9 @@ import (
 )
 
 const headerRequestID = "X-Request-ID"
-const ctxRequestIDKey = "request_id"
+
+// CtxRequestIDKey is the Gin context key storing the correlation ID (also used by response envelopes).
+const CtxRequestIDKey = "request_id"
 
 // RequestID ensures each request has a correlation ID for logs and tracing.
 func RequestID() gin.HandlerFunc {
@@ -16,14 +18,14 @@ func RequestID() gin.HandlerFunc {
 			rid = uuid.NewString()
 		}
 		c.Writer.Header().Set(headerRequestID, rid)
-		c.Set(ctxRequestIDKey, rid)
+		c.Set(CtxRequestIDKey, rid)
 		c.Next()
 	}
 }
 
 // GetRequestID returns the request ID from context, if set.
 func GetRequestID(c *gin.Context) string {
-	v, ok := c.Get(ctxRequestIDKey)
+	v, ok := c.Get(CtxRequestIDKey)
 	if !ok {
 		return ""
 	}

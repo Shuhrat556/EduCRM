@@ -7,6 +7,7 @@ import (
 
 	"github.com/educrm/educrm-backend/internal/config"
 	"github.com/educrm/educrm-backend/internal/delivery/http/handler"
+	"github.com/educrm/educrm-backend/internal/domain"
 	"github.com/educrm/educrm-backend/internal/middleware"
 	"github.com/educrm/educrm-backend/internal/rbac"
 	"github.com/gin-gonic/gin"
@@ -86,6 +87,8 @@ func NewRouter(cfg *config.Config, log *slog.Logger, db *gorm.DB, deps *RouteDep
 			auth.POST("/logout", deps.Auth.Logout)
 			if deps.AuthMiddleware != nil {
 				auth.GET("/me", deps.AuthMiddleware, deps.Auth.Me)
+				auth.POST("/change-password", deps.AuthMiddleware, deps.Auth.ChangePassword)
+				auth.POST("/first-login/change-password", deps.AuthMiddleware, deps.Auth.FirstLoginChangePassword)
 			}
 		}
 	}
@@ -218,6 +221,26 @@ func NewRouter(cfg *config.Config, log *slog.Logger, db *gorm.DB, deps *RouteDep
 			ai.POST("/admin-daily-summary", staffAI, deps.AIAnalytics.AdminDailySummary)
 			ai.POST("/teacher-recommendations", middleware.RequirePermission(rbac.PermAITeacherRecommend), deps.AIAnalytics.TeacherRecommendations)
 			ai.POST("/student-warnings", middleware.RequireAnyPermission(rbac.PermAIStudentWarnings, rbac.PermAIStaffAnalytics), deps.AIAnalytics.StudentWarnings)
+		}
+	}
+
+	if deps != nil && deps.TeacherPortal != nil && deps.AuthMiddleware != nil {
+		tp := v1.Group("/teacher")
+		tp.Use(deps.AuthMiddleware, middleware.RequireRoles(domain.RoleTeacher))
+		{
+			tp.GET("/assignments", deps.TeacherPortal.ListAssignments)
+			tp.GET("/students", deps.TeacherPortal.ListAssignedStudents)
+			tp.GET("/schedule", deps.TeacherPortal.MySchedule)
+		}
+	}
+
+	if deps != nil && deps.StudentPortal != nil && deps.AuthMiddleware != nil {
+		sp := v1.Group("/student")
+		sp.Use(deps.AuthMiddleware, middleware.RequireRoles(domain.RoleStudent))
+		{
+			sp.GET("/grades", deps.StudentPortal.MyGrades)
+			sp.GET("/schedule", deps.StudentPortal.MySchedule)
+			sp.GET("/attendance", deps.StudentPortal.MyAttendance)
 		}
 	}
 

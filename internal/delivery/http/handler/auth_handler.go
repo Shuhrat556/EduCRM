@@ -2,9 +2,11 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/educrm/educrm-backend/internal/apperror"
 	"github.com/educrm/educrm-backend/internal/delivery/http/dto"
+	"github.com/educrm/educrm-backend/internal/domain"
 	"github.com/educrm/educrm-backend/internal/middleware"
 	"github.com/educrm/educrm-backend/internal/usecase/auth"
 	"github.com/educrm/educrm-backend/pkg/response"
@@ -13,12 +15,14 @@ import (
 
 // AuthHandler exposes auth HTTP endpoints.
 type AuthHandler struct {
-	svc *auth.Service
+	svc                *auth.Service
+	requireLoginPortal bool
 }
 
-// NewAuthHandler constructs AuthHandler.
-func NewAuthHandler(svc *auth.Service) *AuthHandler {
-	return &AuthHandler{svc: svc}
+// NewAuthHandler constructs AuthHandler. When requireLoginPortal is true, login requests must include
+// "portal" so the account role matches the UI entry (student/admin/teacher/super_admin).
+func NewAuthHandler(svc *auth.Service, requireLoginPortal bool) *AuthHandler {
+	return &AuthHandler{svc: svc, requireLoginPortal: requireLoginPortal}
 }
 
 // Login godoc
@@ -39,12 +43,80 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
-	pair, err := h.svc.Login(c.Request.Context(), req.Login, req.Password)
+	if h.requireLoginPortal && strings.TrimSpace(req.Portal) == "" {
+		response.Error(c, apperror.Validation("portal", "portal is required: student, admin, teacher, or super_admin (must match this login area)"))
+		return
+	}
+	var expected *domain.Role
+	if p := strings.TrimSpace(strings.ToLower(req.Portal)); p != "" {
+		r, err := portalRole(p)
+		if err != nil {
+			response.Error(c, err)
+			return
+		}
+		expected = &r
+	}
+	out, err := h.svc.LoginWithRole(c.Request.Context(), req.Login, req.Password, expected)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
-	response.JSON(c, http.StatusOK, dto.TokenResponseFrom(pair))
+	// Always return role-aware login response so clients can route by role even when portal is not provided
+	// (when AUTH_REQUIRE_LOGIN_PORTAL=false).
+	response.JSON(c, http.StatusOK, dto.PortalLoginResponseFrom(out))
+}
+
+func portalRole(portal string) (domain.Role, error) {
+	switch portal {
+	case "student":
+		return domain.RoleStudent, nil
+	case "admin":
+		return domain.RoleAdmin, nil
+	case "teacher":
+		return domain.RoleTeacher, nil
+	case "super_admin":
+		return domain.RoleSuperAdmin, nil
+	default:
+		return "", apperror.Validation("portal", "portal must be student, admin, teacher, or super_admin")
+	}
+}
+
+// ChangePassword POST /auth/change-password
+func (h *AuthHandler) ChangePassword(c *gin.Context) {
+	uid, ok := middleware.UserID(c)
+	if !ok {
+		response.Error(c, errNoUserID())
+		return
+	}
+	var req dto.ChangePasswordRequest
+	if err := BindJSON(c, &req); err != nil {
+		response.Error(c, err)
+		return
+	}
+	if err := h.svc.ChangePassword(c.Request.Context(), uid, req.CurrentPassword, req.NewPassword); err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.JSON(c, http.StatusOK, dto.MessageResponse{Message: "Password updated"})
+}
+
+// FirstLoginChangePassword POST /auth/first-login/change-password
+func (h *AuthHandler) FirstLoginChangePassword(c *gin.Context) {
+	uid, ok := middleware.UserID(c)
+	if !ok {
+		response.Error(c, errNoUserID())
+		return
+	}
+	var req dto.FirstLoginPasswordRequest
+	if err := BindJSON(c, &req); err != nil {
+		response.Error(c, err)
+		return
+	}
+	if err := h.svc.FirstLoginSetPassword(c.Request.Context(), uid, req.NewPassword); err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.JSON(c, http.StatusOK, dto.MessageResponse{Message: "Password updated"})
 }
 
 // Refresh godoc

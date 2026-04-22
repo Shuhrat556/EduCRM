@@ -9,14 +9,18 @@ import (
 
 // User is the GORM model for users.
 type User struct {
-	ID           uuid.UUID `gorm:"type:uuid;primaryKey"`
-	Email        *string   `gorm:"size:255;uniqueIndex"`
-	Phone        *string   `gorm:"size:32;uniqueIndex"`
-	PasswordHash string    `gorm:"not null"`
-	Role         string    `gorm:"not null;size:32"`
-	IsActive     bool      `gorm:"not null;default:true;index"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID                  uuid.UUID  `gorm:"type:uuid;primaryKey"`
+	FullName            string     `gorm:"not null;size:255;default:''"`
+	Username            *string    `gorm:"size:64;uniqueIndex"`
+	Email               *string    `gorm:"size:255;uniqueIndex"`
+	Phone               *string    `gorm:"size:32;uniqueIndex"`
+	PasswordHash        string     `gorm:"not null"`
+	Role                string     `gorm:"not null;size:32"`
+	IsActive            bool       `gorm:"not null;default:true;index"`
+	ForcePasswordChange bool       `gorm:"not null;default:false"`
+	CreatedByUserID     *uuid.UUID `gorm:"type:uuid;index"`
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 func (User) TableName() string {

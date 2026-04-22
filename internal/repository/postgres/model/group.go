@@ -11,6 +11,7 @@ import (
 type Group struct {
 	ID              uuid.UUID  `gorm:"type:uuid;primaryKey"`
 	Name            string     `gorm:"not null;size:255"`
+	AcademicYear    *string    `gorm:"size:32"`
 	SubjectID       uuid.UUID  `gorm:"type:uuid;not null;index"`
 	TeacherID       uuid.UUID  `gorm:"type:uuid;not null;index"`
 	RoomID          *uuid.UUID `gorm:"type:uuid;index"`

@@ -6,10 +6,10 @@ import (
 )
 
 var weakJWTSecrets = map[string]struct{}{
-	"change-me-in-production":   {},
-	"dev-only-change-me":        {},
-	"your-256-bit-secret":       {},
-	"secret":                    {},
+	"change-me-in-production": {},
+	"dev-only-change-me":      {},
+	"your-256-bit-secret":     {},
+	"secret":                  {},
 }
 
 // IsProduction reports whether APP_ENV is production.
@@ -68,6 +68,9 @@ func (c *Config) validateProductionAPI() error {
 				return fmt.Errorf("CORS_ALLOW_CREDENTIALS cannot be used with wildcard origins")
 			}
 		}
+	}
+	if !c.RequireLoginPortal {
+		return fmt.Errorf("AUTH_REQUIRE_LOGIN_PORTAL must be true in production so each UI login area only accepts matching roles")
 	}
 	return nil
 }

@@ -36,7 +36,12 @@ func AssertCanCreateTargetRole(actor, target domain.Role) error {
 			return apperror.Forbidden("only super_admin can create users with role admin or super_admin")
 		}
 		return nil
-	case domain.RoleTeacher, domain.RoleStudent:
+	case domain.RoleTeacher:
+		return nil
+	case domain.RoleStudent:
+		if actor != domain.RoleAdmin {
+			return apperror.Forbidden("only admin may create student accounts")
+		}
 		return nil
 	default:
 		return apperror.Validation("role", "invalid role")

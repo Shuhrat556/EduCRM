@@ -188,6 +188,8 @@ Handler, middleware, RBAC, domain, and selected use-case tests use table-driven 
 
 Interactive docs: **`/swagger/index.html`** when Swagger is enabled.
 
+**Frontend / Cursor:** see **`docs/FRONTEND_API.md`** (envelope, auth, base URL, endpoint map, Cursor rule snippet).
+
 Domains include authentication, users, teachers, rooms, groups, schedules, attendance, grades, payments, files, notifications, dashboard, and AI analytics. Roles: `super_admin`, `admin`, `teacher`, `student` (see Swagger for paths and RBAC).
 
 ## Module path

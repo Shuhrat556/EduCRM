@@ -17,6 +17,7 @@ import (
 // Service orchestrates grade use cases.
 type Service struct {
 	grades      repository.GradeRepository
+	assignments repository.TeacherAssignmentRepository
 	groups      repository.GroupRepository
 	users       repository.UserRepository
 	memberships repository.StudentMembershipRepository
@@ -26,6 +27,7 @@ type Service struct {
 // NewService constructs a grade service.
 func NewService(
 	grades repository.GradeRepository,
+	assignments repository.TeacherAssignmentRepository,
 	groups repository.GroupRepository,
 	users repository.UserRepository,
 	memberships repository.StudentMembershipRepository,
@@ -33,6 +35,7 @@ func NewService(
 ) *Service {
 	return &Service{
 		grades:      grades,
+		assignments: assignments,
 		groups:      groups,
 		users:       users,
 		memberships: memberships,
@@ -44,6 +47,7 @@ func NewService(
 type CreateInput struct {
 	StudentID  uuid.UUID
 	GroupID    uuid.UUID
+	SubjectID  uuid.UUID // optional zero = group's subject_id
 	GradeType  domain.GradeType
 	GradeValue float64
 	Comment    *string
@@ -93,7 +97,19 @@ func (s *Service) Create(ctx context.Context, actorRole domain.Role, actorUserID
 	if memGroup == nil || *memGroup != in.GroupID {
 		return nil, apperror.Validation("student_id", "student is not enrolled in this group")
 	}
-	if err := s.ensureCreateActor(ctx, actorRole, actorUserID, in, g.TeacherID); err != nil {
+	subjectID := in.SubjectID
+	if subjectID == uuid.Nil {
+		subjectID = g.SubjectID
+	}
+	actingTeacherID := g.TeacherID
+	if actorRole == domain.RoleTeacher {
+		tid, err := s.linkedTeacherID(ctx, actorUserID)
+		if err != nil {
+			return nil, err
+		}
+		actingTeacherID = *tid
+	}
+	if err := s.ensureCreateActor(ctx, actorRole, actorUserID, in, actingTeacherID, subjectID); err != nil {
 		return nil, err
 	}
 	gradedAt := time.Now().UTC()
@@ -109,8 +125,9 @@ func (s *Service) Create(ctx context.Context, actorRole domain.Role, actorUserID
 	row := &domain.Grade{
 		ID:            uuid.New(),
 		StudentID:     in.StudentID,
-		TeacherID:     g.TeacherID,
+		TeacherID:     actingTeacherID,
 		GroupID:       in.GroupID,
+		SubjectID:     subjectID,
 		WeekStartDate: weekStart,
 		GradeType:     in.GradeType,
 		GradeValue:    in.GradeValue,
@@ -121,7 +138,7 @@ func (s *Service) Create(ctx context.Context, actorRole domain.Role, actorUserID
 	}
 	if err := s.grades.Create(ctx, row); err != nil {
 		if errors.Is(err, repository.ErrDuplicate) {
-			return nil, apperror.Conflict("grade_week_exists", "a grade for this student, teacher, group, week, and grade_type already exists")
+			return nil, apperror.Conflict("grade_week_exists", "a grade for this student, teacher, group, subject, week, and grade_type already exists")
 		}
 		return nil, apperror.Internal("create grade").Wrap(err)
 	}
@@ -175,12 +192,12 @@ func (s *Service) List(ctx context.Context, actorRole domain.Role, actorUserID u
 			if stuGroup == nil {
 				return nil, apperror.New(apperror.KindForbidden, "cannot_view_student", "student has no group enrollment")
 			}
-			g, err := s.groups.FindByID(ctx, *stuGroup)
+			ok, err := s.assignments.HasAnyAssignmentOnGroup(ctx, *tid, *stuGroup)
 			if err != nil {
-				return nil, apperror.Internal("load group").Wrap(err)
+				return nil, apperror.Internal("assignment check").Wrap(err)
 			}
-			if g == nil || g.TeacherID != *tid {
-				return nil, apperror.New(apperror.KindForbidden, "cannot_view_student", "you can only view grades for students in your groups")
+			if !ok {
+				return nil, apperror.New(apperror.KindForbidden, "cannot_view_student", "you can only view grades for students in your assigned groups")
 			}
 			return s.grades.ListByStudent(ctx, *f.StudentID, tid)
 		}
@@ -191,8 +208,12 @@ func (s *Service) List(ctx context.Context, actorRole domain.Role, actorUserID u
 		if grp == nil {
 			return nil, apperror.Validation("group_id", "group not found")
 		}
-		if grp.TeacherID != *tid {
-			return nil, apperror.New(apperror.KindForbidden, "not_group_teacher", "you can only list grades for your assigned groups")
+		ok, err := s.assignments.HasAnyAssignmentOnGroup(ctx, *tid, grp.ID)
+		if err != nil {
+			return nil, apperror.Internal("assignment check").Wrap(err)
+		}
+		if !ok {
+			return nil, apperror.New(apperror.KindForbidden, "not_assigned_group", "you can only list grades for groups you are assigned to")
 		}
 		return s.grades.ListByGroup(ctx, *f.GroupID, tid)
 	default:
@@ -266,21 +287,35 @@ func (s *Service) linkedTeacherID(ctx context.Context, actorUserID uuid.UUID) (*
 	return tid, nil
 }
 
-func (s *Service) ensureCreateActor(ctx context.Context, actorRole domain.Role, actorUserID uuid.UUID, in CreateInput, groupTeacherID uuid.UUID) error {
+func (s *Service) ensureStudentEnrolledInGroup(ctx context.Context, studentUserID, groupID uuid.UUID) error {
+	memGroup, err := s.memberships.FindGroupIDByStudentUserID(ctx, studentUserID)
+	if err != nil {
+		return apperror.Internal("load enrollment").Wrap(err)
+	}
+	if memGroup == nil || *memGroup != groupID {
+		return apperror.New(apperror.KindForbidden, "student_not_in_group", "student is not enrolled in this group")
+	}
+	return nil
+}
+
+func (s *Service) ensureCreateActor(ctx context.Context, actorRole domain.Role, actorUserID uuid.UUID, in CreateInput, actingTeacherID, subjectID uuid.UUID) error {
+	teacherHasAssignment := func() error {
+		ok, err := s.assignments.Exists(ctx, actingTeacherID, in.GroupID, subjectID)
+		if err != nil {
+			return apperror.Internal("assignment check").Wrap(err)
+		}
+		if !ok {
+			return apperror.New(apperror.KindForbidden, "not_assigned_subject", "you are not assigned to grade this subject in this group")
+		}
+		return nil
+	}
 	switch in.GradeType {
 	case domain.GradeTypeTeacherEvaluation:
 		switch actorRole {
 		case domain.RoleSuperAdmin, domain.RoleAdmin:
 			return nil
 		case domain.RoleTeacher:
-			tid, err := s.linkedTeacherID(ctx, actorUserID)
-			if err != nil {
-				return err
-			}
-			if *tid != groupTeacherID {
-				return apperror.New(apperror.KindForbidden, "not_group_teacher", "only the assigned group teacher can create teacher evaluations")
-			}
-			return nil
+			return teacherHasAssignment()
 		default:
 			return apperror.New(apperror.KindForbidden, "insufficient_permissions", "only admin or assigned teacher can create teacher evaluations")
 		}
@@ -294,14 +329,7 @@ func (s *Service) ensureCreateActor(ctx context.Context, actorRole domain.Role, 
 			}
 			return nil
 		case domain.RoleTeacher:
-			tid, err := s.linkedTeacherID(ctx, actorUserID)
-			if err != nil {
-				return err
-			}
-			if *tid != groupTeacherID {
-				return apperror.New(apperror.KindForbidden, "not_group_teacher", "only the assigned group teacher can record student evaluations on behalf of students")
-			}
-			return nil
+			return teacherHasAssignment()
 		default:
 			return apperror.New(apperror.KindForbidden, "insufficient_permissions", "cannot create student evaluation")
 		}
@@ -324,8 +352,15 @@ func (s *Service) ensureCanViewRow(ctx context.Context, actorRole domain.Role, a
 		if err != nil {
 			return err
 		}
-		if row.TeacherID != *tid {
-			return apperror.New(apperror.KindForbidden, "cannot_view_grade", "you can only view grades for your assigned groups")
+		if err := s.ensureStudentEnrolledInGroup(ctx, row.StudentID, row.GroupID); err != nil {
+			return err
+		}
+		ok, err := s.assignments.Exists(ctx, *tid, row.GroupID, row.SubjectID)
+		if err != nil {
+			return apperror.Internal("assignment check").Wrap(err)
+		}
+		if !ok {
+			return apperror.New(apperror.KindForbidden, "cannot_view_grade", "you can only view grades for subjects you teach in this group")
 		}
 		return nil
 	default:
@@ -350,8 +385,18 @@ func (s *Service) ensureCanModifyRow(ctx context.Context, actorRole domain.Role,
 		if err != nil {
 			return err
 		}
+		if err := s.ensureStudentEnrolledInGroup(ctx, row.StudentID, row.GroupID); err != nil {
+			return err
+		}
 		if row.TeacherID != *tid {
-			return apperror.New(apperror.KindForbidden, "cannot_modify_grade", "you can only modify grades for your assigned groups")
+			return apperror.New(apperror.KindForbidden, "cannot_modify_grade", "you can only modify grades you created")
+		}
+		ok, err := s.assignments.Exists(ctx, *tid, row.GroupID, row.SubjectID)
+		if err != nil {
+			return apperror.Internal("assignment check").Wrap(err)
+		}
+		if !ok {
+			return apperror.New(apperror.KindForbidden, "cannot_modify_grade", "not assigned to this subject in this group")
 		}
 		return nil
 	default:

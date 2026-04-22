@@ -87,7 +87,7 @@ func (r *GradeRepository) FindByID(ctx context.Context, id uuid.UUID) (*domain.G
 func (r *GradeRepository) ListByStudent(ctx context.Context, studentID uuid.UUID, viewerTeacherID *uuid.UUID) ([]domain.Grade, error) {
 	q := r.db.WithContext(ctx).Model(&model.Grade{}).Where("grades.student_id = ?", studentID)
 	if viewerTeacherID != nil {
-		q = q.Joins("JOIN groups ON groups.id = grades.group_id AND groups.teacher_id = ?", *viewerTeacherID)
+		q = q.Joins(`JOIN teacher_group_subject_assignments tgsa ON tgsa.group_id = grades.group_id AND tgsa.subject_id = grades.subject_id AND tgsa.teacher_id = ?`, *viewerTeacherID)
 	}
 	var rows []model.Grade
 	if err := q.Order("grades.week_start_date DESC, grades.created_at DESC").Find(&rows).Error; err != nil {
@@ -100,7 +100,7 @@ func (r *GradeRepository) ListByStudent(ctx context.Context, studentID uuid.UUID
 func (r *GradeRepository) ListByGroup(ctx context.Context, groupID uuid.UUID, viewerTeacherID *uuid.UUID) ([]domain.Grade, error) {
 	q := r.db.WithContext(ctx).Model(&model.Grade{}).Where("grades.group_id = ?", groupID)
 	if viewerTeacherID != nil {
-		q = q.Joins("JOIN groups ON groups.id = grades.group_id AND groups.teacher_id = ?", *viewerTeacherID)
+		q = q.Joins(`JOIN teacher_group_subject_assignments tgsa ON tgsa.group_id = grades.group_id AND tgsa.subject_id = grades.subject_id AND tgsa.teacher_id = ?`, *viewerTeacherID)
 	}
 	var rows []model.Grade
 	if err := q.Order("grades.week_start_date DESC, grades.student_id ASC").Find(&rows).Error; err != nil {
@@ -120,6 +120,7 @@ func gradeToDomain(m *model.Grade) (*domain.Grade, error) {
 		StudentID:     m.StudentID,
 		TeacherID:     m.TeacherID,
 		GroupID:       m.GroupID,
+		SubjectID:     m.SubjectID,
 		WeekStartDate: ws,
 		GradeType:     gt,
 		GradeValue:    m.GradeValue,
@@ -136,6 +137,7 @@ func gradeToModel(g *domain.Grade) (*model.Grade, error) {
 		StudentID:     g.StudentID,
 		TeacherID:     g.TeacherID,
 		GroupID:       g.GroupID,
+		SubjectID:     g.SubjectID,
 		WeekStartDate: truncateUTCDate(g.WeekStartDate),
 		GradeType:     string(g.GradeType),
 		GradeValue:    g.GradeValue,

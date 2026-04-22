@@ -60,11 +60,29 @@ func (s *attStubUsers) EmailTaken(ctx context.Context, email string, excludeID *
 func (s *attStubUsers) PhoneTaken(ctx context.Context, phone string, excludeID *uuid.UUID) (bool, error) {
 	return false, nil
 }
+func (s *attStubUsers) UsernameTaken(ctx context.Context, username string, excludeID *uuid.UUID) (bool, error) {
+	return false, nil
+}
+
+type attStubAssign struct{}
+
+func (attStubAssign) Exists(ctx context.Context, teacherID, groupID, subjectID uuid.UUID) (bool, error) {
+	return true, nil
+}
+func (attStubAssign) HasAnyAssignmentOnGroup(ctx context.Context, teacherID, groupID uuid.UUID) (bool, error) {
+	return true, nil
+}
+func (attStubAssign) ListByTeacher(ctx context.Context, teacherID uuid.UUID) ([]repository.TeacherAssignmentRow, error) {
+	return nil, nil
+}
 
 type attStubMem struct{ gid uuid.UUID }
 
 func (s *attStubMem) FindGroupIDByStudentUserID(ctx context.Context, studentUserID uuid.UUID) (*uuid.UUID, error) {
 	return &s.gid, nil
+}
+func (s *attStubMem) ListStudentUserIDsByGroup(ctx context.Context, groupID uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
 }
 
 type attStubLinks struct{}
@@ -78,6 +96,7 @@ func TestCreate_duplicateReturnsConflict(t *testing.T) {
 	studentID, groupID, teacherID := uuid.New(), uuid.New(), uuid.New()
 	svc := NewService(
 		&attStubRepo{createErr: repository.ErrDuplicate},
+		attStubAssign{},
 		&attStubGroups{g: &domain.Group{ID: groupID, TeacherID: teacherID}},
 		&attStubUsers{u: &domain.User{ID: studentID, Role: domain.RoleStudent}},
 		&attStubMem{gid: groupID},
@@ -100,7 +119,7 @@ func TestCreate_duplicateReturnsConflict(t *testing.T) {
 
 func TestList_filterExactlyOne(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(&attStubRepo{}, &attStubGroups{}, &attStubUsers{}, &attStubMem{}, &attStubLinks{})
+	svc := NewService(&attStubRepo{}, attStubAssign{}, &attStubGroups{}, &attStubUsers{}, &attStubMem{}, &attStubLinks{})
 	sid := uuid.New()
 	tests := []struct {
 		name    string
